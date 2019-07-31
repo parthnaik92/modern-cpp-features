@@ -1,9 +1,13 @@
-# C++17/14/11
+# C++20/17/14/11
 
 ## Overview
 Many of these descriptions and examples come from various resources (see [Acknowledgements](#acknowledgements) section), summarized in my own words.
 
-Also, there are now dedicated readme pages for each major C++ version.
+C++20 includes the following new language features:
+- [concepts](#concepts)
+
+C++20 includes the following new library features:
+- [concepts library](#concepts-library)
 
 C++17 includes the following new language features:
 - [template argument deduction for class templates](#template-argument-deduction-for-class-templates)
@@ -19,6 +23,7 @@ C++17 includes the following new language features:
 - [constexpr if](#constexpr-if)
 - [utf-8 character literals](#utf-8-character-literals)
 - [direct-list-initialization of enums](#direct-list-initialization-of-enums)
+- [New standard attributes](#new-standard-attributes)
 
 C++17 includes the following new library features:
 - [std::variant](#stdvariant)
@@ -40,6 +45,7 @@ C++14 includes the following new language features:
 - [decltype(auto)](#decltypeauto)
 - [relaxing constraints on constexpr functions](#relaxing-constraints-on-constexpr-functions)
 - [variable templates](#variable-templates)
+- [\[\[deprecated\]\] attribute](#deprecated-attribute)
 
 C++14 includes the following new library features:
 - [user-defined literals for standard library types](#user-defined-literals-for-standard-library-types)
@@ -74,6 +80,8 @@ C++11 includes the following new language features:
 - [inline-namespaces](#inline-namespaces)
 - [non-static data member initializers](#non-static-data-member-initializers)
 - [right angle brackets](#right-angle-brackets)
+- [ref-qualified member functions](#ref-qualified-member-functions)
+- [trailing return types](#trailing-return-types)
 
 C++11 includes the following new library features:
 - [std::move](#stdmove)
@@ -90,6 +98,189 @@ C++11 includes the following new library features:
 - [std::make_shared](#stdmake_shared)
 - [memory model](#memory-model)
 - [std::async](#stdasync)
+
+## C++20 Language Features
+
+### Concepts
+_Concepts_ are named compile-time predicates which constrain types. They take the following form:
+```
+template < template-parameter-list >
+concept concept-name = constraint-expression;
+```
+where `constraint-expression` evaluates to a constexpr Boolean. _Constraints_ should model semantic requirements, such as whether a type is a numeric or hashable. A compiler error results if a given type does not satisfy the concept it's bound by (i.e. `constraint-expression` returns `false`). Because constraints are evaluated at compile-time, they can provide more meaningful error messages and runtime safety.
+```c++
+// `T` is not limited by any constraints.
+template <typename T>
+concept AlwaysSatisfied = true;
+// Limit `T` to integrals.
+template <typename T>
+concept Integral = std::is_integral_v<T>;
+// Limit `T` to both the `Integral` constraint and signedness.
+template <typename T>
+concept SignedIntegral = Integral<T> && std::is_signed_v<T>;
+// Limit `T` to both the `Integral` constraint and the negation of the `SignedIntegral` constraint.
+template <typename T>
+concept UnsignedIntegral = Integral<T> && !SignedIntegral<T>;
+```
+There are a variety of syntactic forms for enforcing concepts:
+```c++
+// Forms for function parameters:
+// `T` is a constrained type template parameter.
+template <MyConcept T>
+void f(T v);
+
+// `T` is a constrained type template parameter.
+template <typename T>
+  requires MyConcept<T>
+void f(T v);
+
+// `T` is a constrained type template parameter.
+template <typename T>
+void f(T v) requires MyConcept<T>;
+
+// `v` is a constrained deduced parameter.
+void f(MyConcept auto v);
+
+// `v` is a constrained non-type template parameter.
+template <MyConcept auto v>
+void g();
+
+// Forms for auto-deduced variables:
+// `foo` is a constrained auto-deduced value.
+MyConcept auto foo = ...;
+
+// Forms for lambdas:
+// `T` is a constrained type template parameter.
+auto f = []<MyConcept T> (T v) {
+  // ...
+};
+// `T` is a constrained type template parameter.
+auto f = []<typename T> requires MyConcept<T> (T v) {
+  // ...
+};
+// `T` is a constrained type template parameter.
+auto f = []<typename T> (T v) requires MyConcept<T> {
+  // ...
+};
+// `v` is a constrained deduced parameter.
+auto f = [](MyConcept auto v) {
+  // ...
+};
+// `v` is a constrained non-type template parameter.
+auto g = []<MyConcept auto v> () {
+  // ...
+};
+```
+The `requires` keyword is used either to start a requires clause or a requires expression:
+```c++
+template <typename T>
+  requires MyConcept<T> // `requires` clause.
+void f(T);
+
+template <typename T>
+concept Callable = requires (T f) { f(); }; // `requires` expression.
+
+template <typename T>
+  requires requires (T x) { x + x; } // `requires` clause and expression on same line.
+T add(T a, T b) {
+  return a + b;
+}
+```
+Note that the parameter list in a requires expression is optional. Each requirement in a requires expression are one of the following:
+
+* **Simple requirements** - asserts that the given expression is valid.
+
+```c++
+template <typename T>
+concept Callable = requires (T f) { f(); };
+```
+* **Type requirements** - denoted by the `typename` keyword followed by a type name, asserts that the given type name is valid.
+
+```c++
+struct Foo {
+  int foo;
+};
+
+struct Bar {
+  using value = int;
+  value data;
+};
+
+struct Baz {
+  using value = int;
+  value data;
+};
+
+// Using SFINAE, enable if `T` is a `Baz`.
+template <typename T, typename = std::enable_if_t<std::is_same_v<T, Baz>>>
+struct S {};
+
+template <typename T>
+using Ref = T&;
+
+template <typename T>
+concept C = requires {
+                     // Requirements on type `T`:
+  typename T::value; // A) has an inner member named `value`
+  typename S<T>;     // B) must have a valid class template specialization for `S`
+  typename Ref<T>;   // C) must be a valid alias template substitution
+};
+
+template <C T>
+void g(T a);
+
+g(Foo{}); // ERROR: Fails requirement A.
+g(Bar{}); // ERROR: Fails requirement B.
+g(Baz{}); // PASS.
+```
+* **Compound requirements** - an expression in braces followed by a trailing return type or type constraint.
+
+```c++
+template <typename T>
+concept C = requires(T x) {
+  {*x} -> typename T::inner; // the type of the expression `*x` is convertible to `T::inner`
+  {x + 1} -> std::Same<int>; // the expression `x + 1` satisfies `std::Same<decltype((x + 1))>`
+  {x * 1} -> T; // the type of the expression `x * 1` is convertible to `T`
+};
+```
+* **Nested requirements** - denoted by the `requires` keyword, specify additional constraints (such as those on local parameter arguments).
+
+```c++
+template <typename T>
+concept C = requires(T x) {
+  requires std::Same<sizeof(x), size_t>;
+};
+```
+See also: [concepts library](#concepts-library).
+
+## C++20 Library Features
+
+### Concepts library
+Concepts are also provided by the standard library for building more complicated concepts. Some of these include:
+
+**Core language concepts:**
+- `Same` - specifies two types are the same.
+- `DerivedFrom` - specifies that a type is derived from another type.
+- `ConvertibleTo` - specifies that a type is implicitly convertible to another type.
+- `Common` - specifies that two types share a common type.
+- `Integral` - specifies that a type is an integral type.
+- `DefaultConstructible` - specifies that an object of a type can be default-constructed.
+
+ **Comparison concepts:**
+- `Boolean` - specifies that a type can be used in Boolean contexts.
+- `EqualityComparable` - specifies that `operator==` is an equivalence relation.
+
+ **Object concepts:**
+- `Movable` - specifies that an object of a type can be moved and swapped.
+- `Copyable` - specifies that an object of a type can be copied, moved, and swapped.
+- `Semiregular` - specifies that an object of a type can be copied, moved, swapped, and default constructed.
+- `Regular` - specifies that a type is _regular_, that is, it is both `Semiregular` and `EqualityComparable`.
+
+ **Callable concepts:**
+- `Invocable` - specifies that a callable type can be invoked with a given set of argument types.
+- `Predicate` - specifies that a callable type is a Boolean predicate.
+
+See also: [concepts](#concepts).
 
 ## C++17 Language Features
 
@@ -125,7 +316,7 @@ auto seq2 = my_integer_sequence<0, 1, 2>();
 ### Folding expressions
 A fold expression performs a fold of a template parameter pack over a binary operator.
 * An expression of the form `(... op e)` or `(e op ...)`, where `op` is a fold-operator and `e` is an unexpanded parameter pack, are called _unary folds_.
-* An expression of the form `(e1 op ... op e2)`, where `op` are fold-operators, is called a _binary fold_. Either `e1` or `e2` are unexpanded parameter packs, but not both.
+* An expression of the form `(e1 op ... op e2)`, where `op` are fold-operators, is called a _binary fold_. Either `e1` or `e2` is an unexpanded parameter pack, but not both.
 ```c++
 template<typename... Args>
 bool logicalAnd(Args... args) {
@@ -296,6 +487,26 @@ byte b {0}; // OK
 byte c {-1}; // ERROR
 byte d = byte{1}; // OK
 byte e = byte{256}; // ERROR
+```
+
+### New standard attributes
+C++17 introduces three new attributes: `[[fallthrough]]`, `[[nodiscard]]` and `[[maybe_unused]]`:
+```c++
+// Will warn if return of foo() is ignored
+[[nodiscard]] int foo();
+
+int main() {
+  int a {1};
+  switch (a) {
+      // Indicates that falling through on case 1 is intentional
+      case 1: [[fallthrough]]
+      case 2:
+      // Indicates that b might be unused, such as on production builds
+        [[maybe_unused]] int b = foo();
+        assert(b > 0);
+        break;
+  }
+}
 ```
 
 ## C++17 Library Features
@@ -596,6 +807,16 @@ template<class T>
 constexpr T e  = T(2.7182818284590452353);
 ```
 
+### [[deprecated]] attribute
+C++14 introduces the `[[deprecated]]` attribute to indicate that a unit (function, class, etc) is discouraged and likely yield compilation warnings. If a reason is provided, it will be included in the warnings.
+```c++
+[[deprecated]]
+void old_method();
+
+[[deprecated("Use new_method instead")]]
+void legacy_method();
+```
+
 ## C++14 Library Features
 
 ### User-defined literals for standard library types
@@ -696,6 +917,13 @@ void f(T&& t) {
 int x = 0;
 f(0); // deduces as f(int&&)
 f(x); // deduces as f(int&)
+
+int& y = x;
+f(y); // deduces as f(int& &&) => f(int&)
+
+int&& z = 0; // NOTE: `z` is an lvalue with type `int&&`.
+f(z); // deduces as f(int&& &) => f(int&&)
+f(std::move(z)); // deduces as f(int&& &&) => f(int&&)
 ```
 
 See also: [`std::move`](#stdmove), [`std::forward`](#stdforward), [`rvalue references`](#rvalue-references).
@@ -1160,13 +1388,74 @@ class Human {
 };
 ```
 
-### Right angle Brackets
+### Right angle brackets
 C++11 is now able to infer when a series of right angle brackets is used as an operator or as a closing statement of typedef, without having to add whitespace.
 
 ```c++
 typedef std::map<int, std::map <int, std::map <int, int> > > cpp98LongTypedef;
 typedef std::map<int, std::map <int, std::map <int, int>>>   cpp11LongTypedef;
 ```
+
+### Ref-qualified member functions
+Member functions can now be qualified depending on whether `*this` is an lvalue or rvalue reference.
+
+```c++
+struct Bar {
+  // ...
+};
+
+struct Foo {
+  Bar getBar() & { return bar; }
+  Bar getBar() const& { return bar; }
+  Bar getBar() && { return std::move(bar); }
+  Bar getBar() const&& { return std::move(bar); }
+private:
+  Bar bar{};
+};
+
+Foo foo{};
+Bar bar = foo.getBar(); // calls `Bar getBar() &`
+
+const Foo foo2{};
+Bar bar2 = foo2.getBar(); // calls `Bar Foo::getBar() const&`
+
+Foo{}.getBar(); // calls `Bar Foo::getBar() &&`
+std::move(foo).getBar(); // calls `Bar Foo::getBar() &&`
+
+std::move(foo2).getBar(); // calls `Bar Foo::getBar() const&&`
+```
+
+### Trailing return types
+C++11 allows functions and lambdas an alternative syntax for specifying their return types.
+```c++
+int f() {
+  return 123;
+}
+// vs.
+auto f() -> int {
+  return 123;
+}
+```
+```c++
+auto g = []() -> int {
+  return 123;
+};
+```
+This feature is especially useful when certain return types cannot be resolved:
+```c++
+// NOTE: This does not compile!
+template <typename T, typename U>
+decltype(a + b) add(T a, U b) {
+    return a + b;
+}
+
+// Trailing return types allows this:
+template <typename T, typename U>
+auto add(T a, U b) -> decltype(a + b) {
+    return a + b;
+}
+```
+In C++14, [decltype(auto)](#decltypeauto) can be used instead.
 
 ## C++11 Library Features
 
@@ -1305,7 +1594,7 @@ start = std::chrono::steady_clock::now();
 end = std::chrono::steady_clock::now();
 
 std::chrono::duration<double> elapsed_seconds = end - start;
-elapsed_seconds.count(); // t number of seconds, represented as a `double`
+double t = elapsed_seconds.count(); // t number of seconds, represented as a `double`
 ```
 
 ### Tuples
